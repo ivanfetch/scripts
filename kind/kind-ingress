@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Configure a Kind cluster to support Ingress resources using
+# the Ingress Nginx controller.
+# This will listen on localhost ports 80 and 443.
+# Manually add entries to your local hosts file for Ingress hostnames, like:
+# 127.0.0.1 app.example.com
+#
+# This port forwards kind control-plane HostPorts 80 and 443, that the
+# Ingress controller will use as Service HostPorts.
+# The installed Ingress Nginx controller is a kind-specific Kube manifest,
+# that uses HostPorts, and publishes itself to localhost.
+
+ingress_nginx_manifest_url="https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml"
+cat <<EOF | \
+  kind create cluster --config=- $@
+# A kind config file to port forward for an Ingress controller.
+# See also for general kind config file options: https://kind.sigs.k8s.io/docs/user/configuration/
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"
+  extraPortMappings:
+  - containerPort: 80
+    hostPort: 80
+    protocol: TCP
+  - containerPort: 443
+    hostPort: 443
+    protocol: TCP
+EOF
+if [ $? -eq 0 ] ; then
+  echo "$0 - Installing Ingress Nginx from ${ingress_nginx_manifest_url}"
+kubectl apply -f "${ingress_nginx_manifest_url}"
+fi
+

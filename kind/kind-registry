@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Create a local Docker registry and a kind cluster that uses it.
+# This does not currently support naming the registry nor kind cluster.
+# Ref: https://kind.sigs.k8s.io/docs/user/local-registry/
+
+reg_name='kind-registry'
+reg_port='5000'
+# PRovide helpful registry-related command-line options
+case "$1" in
+  -repo|-repos|-image|-images)
+    echo Listing images from registry ${reg_name}:${reg_port}
+    curl -s http://localhost:${reg_port}/v2/_catalog
+    exit 0
+  ;;
+  -tag|-tags)
+    if [ "x${2}" == "x" ] ; then
+      echo Please specify an image name with the $1 option.
+      echo To list images in this registry, run $0 -images
+      exit 1
+    fi
+    echo Listing tags for image "$2" from registry ${reg_name}:${reg_port}
+    curl -s http://localhost:${reg_port}/v2/${2}/tags/list
+    exit 0
+  ;;
+  -h|--help|-help|help)
+    cat <<EOF
+This script creates a local registry in a docker container, then creates a kind cluster that will be able to use that registry.
+Usage: $0 with no arguments, creates the registry and kind cluster.
+$0 -images|-repos lists the images; repositories in the registry.
+$0 -tags <image name> Lists the tags for the given image.
+
+EOF
+    exit 0
+  ;;
+esac
+
+# create registry container unless it already exists
+registry_exists="$(docker inspect -f '{{.State.Running}}' "${reg_name}" 2>/dev/null || true)"
+if [ "${registry_exists}" != 'true' ]; then
+  echo Creating a registry${reg_name} on localhost port ${reg_port}. . .
+  docker run \
+    -d --restart=always -p "127.0.0.1:${reg_port}:5000" --name "${reg_name}" \
+    registry:2
+else
+  echo A registry already exists at ${reg_name} on localhost port ${reg_port} - no need to create one.
+fi
+
+# create a cluster with the local registry enabled in containerd
+cat <<EOF | kind create cluster --config=-
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+containerdConfigPatches:
+- |-
+  [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:${reg_port}"]
+    endpoint = ["http://${reg_name}:5000"]
+EOF
+
+# connect the registry to the cluster network
+# (the network may already be connected)
+docker network connect "kind" "${reg_name}" || true
+
+# Document the local registry
+# https://github.com/kubernetes/enhancements/tree/master/keps/sig-cluster-lifecycle/generic/1755-communicating-a-local-registry
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: local-registry-hosting
+  namespace: kube-public
+data:
+  localRegistryHosting.v1: |
+    host: "localhost:${reg_port}"
+    help: "https://kind.sigs.k8s.io/docs/user/local-registry/"
+EOF
+
+cat <<EOF
+build and push to this registry from your local Docker, using: docker build -t localhost:${reg_port}/repository . && docker push localhost:${reg_port}/repository
+
+This registry is available in the kind cluster as localhost:${reg_port} or ${reg_name}:${reg_port}
+
+RUn $0 -repos or $0 <repo> -tags to query this registry for repositories or tags for a particular repository.
+EOF
+
