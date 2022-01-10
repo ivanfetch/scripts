@@ -3,49 +3,67 @@
 # This does not currently support naming the registry nor kind cluster.
 # Ref: https://kind.sigs.k8s.io/docs/user/local-registry/
 
+scriptname=$(basename $0)
+
+# Output information from this script
+info() {
+echo "${scriptname}: $@"
+}
+
+
 reg_name='kind-registry'
 reg_port='5000'
-# PRovide helpful registry-related command-line options
+# PRocess command-line options.
 case "$1" in
   -repo|-repos|-image|-images)
-    echo Listing images from registry ${reg_name}:${reg_port}
+    echo "Listing images from local registry ${reg_name}:${reg_port}"
     curl -s http://localhost:${reg_port}/v2/_catalog
     exit 0
   ;;
   -tag|-tags)
     if [ "x${2}" == "x" ] ; then
-      echo Please specify an image name with the $1 option.
-      echo To list images in this registry, run $0 -images
+      echo "Please include an image name with the $1 option."
+      echo "To list images in this registry, run $scriptname -images"
       exit 1
     fi
-    echo Listing tags for image "$2" from registry ${reg_name}:${reg_port}
+    echo "Listing tags for image "$2" from local registry ${reg_name}:${reg_port}"
     curl -s http://localhost:${reg_port}/v2/${2}/tags/list
     exit 0
+  ;;
+  delete)
+    info "Deleting the ${reg_name} container and kind cluster."
+    docker stop ${reg_name} && docker rm ${reg_name} && \
+    kind delete cluster
+    exit $?
   ;;
   -h|--help|-help|help)
     cat <<EOF
 This script creates a local registry in a docker container, then creates a kind cluster that will be able to use that registry.
-Usage: $0 with no arguments, creates the registry and kind cluster.
-$0 -images|-repos lists the images; repositories in the registry.
-$0 -tags <image name> Lists the tags for the given image.
-
+Usage: $scriptname with no arguments -- Creates or starts a "${reg_name}" registry container, and creates a kind cluster to use that registry.
+$scriptname -images|-repos -- Lists the images; repositories in the registry.
+$scriptname -tags <image name> -- Lists the tags for the given image.
+$scriptname delete -- Removes both the registry container and kind cluster.
 EOF
     exit 0
   ;;
 esac
 
-# create registry container unless it already exists
-registry_exists="$(docker inspect -f '{{.State.Running}}' "${reg_name}" 2>/dev/null || true)"
-if [ "${registry_exists}" != 'true' ]; then
-  echo Creating a registry${reg_name} on localhost port ${reg_port}. . .
+# Create or start the registry container.
+registry_running="$(docker inspect -f '{{.State.Running}}' "${reg_name}" 2>/dev/null)"
+if [ $? -eq 1 ] ; then
+  info "Creating a registry container ${reg_name} on localhost port ${reg_port}. . ."
   docker run \
     -d --restart=always -p "127.0.0.1:${reg_port}:5000" --name "${reg_name}" \
     registry:2
-else
-  echo A registry already exists at ${reg_name} on localhost port ${reg_port} - no need to create one.
+elif [ "${registry_running}" != 'true' ]; then
+  info "Starting the existing registry container at ${reg_name} on localhost port ${reg_port}"
+docker start "${reg_name}"
+elif [ "${registry_running}" == 'true' ]; then
+  info "The registry container ${reg_name} is already running."
 fi
 
-# create a cluster with the local registry enabled in containerd
+# create a cluster with the local registry enabled in containerd.
+info "Creating a kind cluster."
 cat <<EOF | kind create cluster --config=-
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
@@ -54,13 +72,15 @@ containerdConfigPatches:
   [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:${reg_port}"]
     endpoint = ["http://${reg_name}:5000"]
 EOF
-
-# connect the registry to the cluster network
-# (the network may already be connected)
+if [ $? -gt 0 ] ; then
+  info "WARNING: As the kind cluster already exists, the registry may not be available via localhost, and may only be available a the hostname ${reg_name}."
+fi
+info "Connecting the kind cluster to the ${reg_name} registry network (this may already be connected)."
 docker network connect "kind" "${reg_name}" || true
 
 # Document the local registry
 # https://github.com/kubernetes/enhancements/tree/master/keps/sig-cluster-lifecycle/generic/1755-communicating-a-local-registry
+info "Documenting the local registry in-cluster."
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
 kind: ConfigMap
@@ -73,11 +93,17 @@ data:
     help: "https://kind.sigs.k8s.io/docs/user/local-registry/"
 EOF
 
+info "Some information about using this local registry:"
 cat <<EOF
 build and push to this registry from your local Docker, using: docker build -t localhost:${reg_port}/repository . && docker push localhost:${reg_port}/repository
+(Where "repository" refers to the name you want to give your image)
 
 This registry is available in the kind cluster as localhost:${reg_port} or ${reg_name}:${reg_port}
 
-RUn $0 -repos or $0 <repo> -tags to query this registry for repositories or tags for a particular repository.
+Run $scriptname -repos to query this registry for available repositories.
+Run $scriptname <repo> -tags to query this registry for available tags of a particular repository.
+
+When you are done using this registry, stop its container by running: docker stop ${reg_name}, or run $scriptname delete to delete both the registry container and the kind cluster.
+
 EOF
 
