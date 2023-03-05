@@ -1,12 +1,34 @@
 #!/usr/bin/env bash
 
 # Create a KIND cluster using a particular version of Kubernetes
-# Last updated for KIND version 1.12.0 and Kubernetes 1.23
+# Last updated for KIND version v0.17.0 and Kubernetes 1.26
 #
 # The KIND folks recommend using node images including a checksum,
 # in case the image format needs to change again as it did for M1 Macs.
 #
 # Ref: https://github.com/kubernetes-sigs/kind/releases
+#
+desired_kind_version='0.17.0'
+install_kind_message="To install kind version ${desired_kind_version}, visit https://github.com/kubernetes-sigs/kind/releases/tag/v${desired_kind_version}"
+
+function check_kind_version {
+  if ! command -v kind &> /dev/null ; then
+    echo "The kind command is not in your \$PATH. This script is known to work with kind version ${desired_kind_version}."
+    echo "${install_kind_message}"
+    exit 1
+  fi
+  if ! command -v grep &> /dev/null ; then
+    echo "*** WARNING Unable to verify the version of the kind command, as the grep command is not available. If kind is not version ${desired_kind_version}, all versions of Kubernetes may not be usable with this version of kind. ***"
+  fi
+  local kind_version_output=$(kind version)
+  echo "${kind_version_output}" |grep -i " v${desired_kind_version}" &>/dev/null
+  if [ $? -gt 0 ] ; then
+    echo "*** It is possible that some versions of Kubernetes are not compatible with the installed version of kind. ***"
+    echo "The version of kind does not appear to be ${desired_kind_version}, which this $(basename $0) script is known to work with. The installed version of kind is: ${kind_version_output}"
+    echo
+  fi
+}
+
 
 kube_version="$1"
 shift
@@ -15,19 +37,30 @@ if [ "x${kube_version}" == "x" ] ; then
   echo "Usage: $0 <kubernetes major.minor version>"
   echo "For example: $0 1.19"
   echo
-  echo "Versions 1.14 through 1.23 are supported."
+  echo "Kubernetes versions 1.19 through 1.26 are supported."
+  check_kind_version
   exit 1
 fi
+check_kind_version
 
 case "${kube_version}" in
+  1.26)
+    image='kindest/node:v1.26.0@sha256:691e24bd2417609db7e589e1a479b902d2e209892a10ce375fab60a8407c7352'
+  ;;
+  1.25)
+    image='kindest/node:v1.25.3@sha256:f52781bc0d7a19fb6c405c2af83abfeb311f130707a0e219175677e366cc45d1'
+  ;;
+  1.24)
+    image='kindest/node:v1.24.7@sha256:577c630ce8e509131eab1aea12c022190978dd2f745aac5eb1fe65c0807eb315'
+  ;;
   1.23)
-    image='kindest/node:v1.23.4@sha256:0e34f0d0fd448aa2f2819cfd74e99fe5793a6e4938b328f657c8e3f81ee0dfb9'
+    image='kindest/node:v1.23.13@sha256:ef453bb7c79f0e3caba88d2067d4196f427794086a7d0df8df4f019d5e336b61'
   ;;
   1.22)
-    image='kindest/node:v1.22.7@sha256:1dfd72d193bf7da64765fd2f2898f78663b9ba366c2aa74be1fd7498a1873166'
+    image='kindest/node:v1.22.15@sha256:7d9708c4b0873f0fe2e171e2b1b7f45ae89482617778c1c875f1053d4cef2e41'
   ;;
   1.21)
-    image='kindest/node:v1.21.10@sha256:84709f09756ba4f863769bdcabe5edafc2ada72d3c8c44d6515fc581b66b029c'
+    image='kindest/node:v1.21.14@sha256:9d9eb5fb26b4fbc0c6d95fa8c790414f9750dd583f5d7cee45d92e8c26670aa1'
   ;;
   1.20)
     image='kindest/node:v1.20.15@sha256:393bb9096c6c4d723bb17bceb0896407d7db581532d11ea2839c80b28e5d8deb'
@@ -35,23 +68,8 @@ case "${kube_version}" in
   1.19)
     image='kindest/node:v1.19.16@sha256:81f552397c1e6c1f293f967ecb1344d8857613fb978f963c30e907c32f598467'
   ;;
-  1.18)
-    image='kindest/node:v1.18.20@sha256:e3dca5e16116d11363e31639640042a9b1bd2c90f85717a7fc66be34089a8169'
-  ;;
-  1.17)
-    image='kindest/node:v1.17.17@sha256:e477ee64df5731aa4ef4deabbafc34e8d9a686b49178f726563598344a3898d5'
-  ;;
-  1.16)
-    image='kindest/node:v1.16.15@sha256:64bac16b83b6adfd04ea3fbcf6c9b5b893277120f2b2cbf9f5fa3e5d4c2260cc'
-  ;;
-  1.15)
-    image='kindest/node:v1.15.12@sha256:9dfc13db6d3fd5e5b275f8c4657ee6a62ef9cb405546664f2de2eabcfd6db778'
-  ;;
-  1.14)
-    image='kindest/node:v1.14.10@sha256:b693339da2a927949025869425e20daf80111ccabf020d4021a23c00bae29d82'
-  ;;
   *)
-    echo "No image known for Kubernetes version ${kube_version}... Exiting."
+    echo "No image known for Kubernetes version ${kube_version}, that is supported by kind ${desired_kind_version}... Exiting."
     exit 1
   ;;
 esac
